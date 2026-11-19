@@ -2,9 +2,9 @@
 import * as db from './db.js';
 import * as store from './store.js';
 import { Game, requestFullscreen } from './game.js';
-import { TARGET_ASPECT, cropRect, defaultCrop, loadImage } from './imaging.js';
+import { TARGET_ASPECT, cropRect, defaultCrop, loadImage, processLogo } from './imaging.js';
 
-export const APP_VERSION = '1.0.1';
+export const APP_VERSION = '1.1.0';
 
 const $view = document.getElementById('view');
 const $modalRoot = document.getElementById('modal-root');
@@ -12,10 +12,14 @@ const $game = document.getElementById('game');
 const $toast = document.getElementById('toast');
 const $fileImages = document.getElementById('file-images');
 const $fileBackup = document.getElementById('file-backup');
+const $fileLogo = document.getElementById('file-logo');
+const DEFAULT_LOGO = 'assets/logo-hoch.png';
 
 let objectUrls = [];
 let route = { name: 'home' };
 let game = null;
+let selecting = false;          // Auswahlmodus in der Sammlung
+const selected = new Set();
 
 /* ---------- Hilfen ---------- */
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -108,11 +112,12 @@ async function importReport(report) {
 /* ---------- Ansichten ---------- */
 async function render() {
   freeUrls();
+  $view.classList.remove('is-selecting');
   if (route.name === 'collection') await renderCollection(route.id);
   else await renderHome();
   $view.focus({ preventScroll: true });
 }
-function go(r) { route = r; window.scrollTo(0, 0); render(); }
+function go(r) { route = r; selecting = false; selected.clear(); window.scrollTo(0, 0); render(); }
 
 async function renderHome() {
   const cols = await store.listCollections();
@@ -149,29 +154,68 @@ async function renderCollection(id) {
   if (!col) return go({ name: 'home' });
   const imgs = await db.imagesOf(id);
   const low = imgs.filter(r => r.lowRes).length;
+  for (const sid of [...selected]) if (!imgs.some(r => r.id === sid)) selected.delete(sid);
+  $view.classList.toggle('is-selecting', selecting);
   $view.innerHTML = `
     <div><button type="button" class="link" data-act="home">‹ Alle Sammlungen</button></div>
     <div class="col-head">
       <div>
         <h1>${esc(col.name)}</h1>
-        <p class="meta">${plural(imgs.length, 'Bild', 'Bilder')} · Reihenfolge aus den Dateinamen</p>
+        <p class="meta">${plural(imgs.length, 'Bild', 'Bilder')} · Reihenfolge aus den Dateinamen · ${col.logo ? 'eigenes Logo' : 'Standard-Logo'}</p>
       </div>
       <button type="button" class="btn primary big" data-act="play" ${imgs.length ? '' : 'disabled'}>Spiel starten</button>
     </div>
     <div class="tools">
-      <button type="button" class="btn" data-act="replace">Bilder ersetzen</button>
+      <button type="button" class="btn" data-act="add">+ Bilder hinzufügen</button>
+      <button type="button" class="btn" data-act="select" ${imgs.length ? '' : 'disabled'}>${selecting ? 'Auswahl beenden' : 'Auswählen'}</button>
+      <button type="button" class="btn" data-act="replace">Alle ersetzen</button>
+      <button type="button" class="btn" data-act="logo">Logo</button>
       <button type="button" class="btn" data-act="rename">Umbenennen</button>
       <button type="button" class="btn danger-ghost" data-act="delete">Sammlung löschen</button>
     </div>
     ${low ? `<div class="notice"><span><b>${plural(low, 'Bild hat', 'Bilder haben')} eine geringe Auflösung.</b> ${low === 1 ? 'Es ist' : 'Sie sind'} markiert und ${low === 1 ? 'kann' : 'können'} auf der Leinwand unscharf wirken.</span></div>` : ''}
     <ol class="grid">
       ${imgs.map((r, i) => `
-        <li><button type="button" class="thumb" data-act="crop" data-id="${esc(r.id)}" aria-label="Ausschnitt von ${esc(r.name)} anpassen">
-          <span class="thumb-img"><img src="${url(r.thumb)}" alt="" loading="lazy"><span class="num">${i + 1}</span>${r.lowRes ? '<span class="warn-chip">Geringe Auflösung</span>' : ''}</span>
+        <li><button type="button" class="thumb${selected.has(r.id) ? ' is-selected' : ''}" data-act="crop" data-id="${esc(r.id)}" aria-pressed="${selected.has(r.id)}" aria-label="${esc(r.name)}">
+          <span class="thumb-img"><img src="${url(r.thumb)}" alt="" loading="lazy"><span class="num">${i + 1}</span><span class="check" aria-hidden="true"></span>${r.lowRes ? '<span class="warn-chip">Geringe Auflösung</span>' : ''}</span>
           <span class="thumb-name">${esc(r.name)}</span>
         </button></li>`).join('')}
     </ol>
-    <p class="hint">Auf ein Bild tippen, um den sichtbaren Ausschnitt zu verschieben. Die Reihenfolge ändert ihr in OneDrive und importiert dann mit „Bilder ersetzen“ neu.</p>`;
+    <p class="hint">${selecting ? 'Bilder antippen, um sie auszuwählen.' : 'Auf ein Bild tippen, um den sichtbaren Ausschnitt zu verschieben. Neue Bilder werden nach der Nummer im Dateinamen einsortiert.'}</p>
+    ${selecting ? `<div class="selectbar" role="toolbar" aria-label="Auswahl">
+      <span><b data-sel-count>0</b> ausgewählt</span>
+      <div class="row">
+        <button type="button" class="btn" data-act="sel-all">Alle</button>
+        <button type="button" class="btn" data-act="sel-replace">Ersetzen</button>
+        <button type="button" class="btn danger" data-act="sel-delete">Löschen</button>
+        <button type="button" class="btn primary" data-act="select">Fertig</button>
+      </div></div>` : ''}`;
+  updateSelectBar();
+}
+
+function updateSelectBar() {
+  const c = $view.querySelector('[data-sel-count]');
+  if (!c) return;
+  c.textContent = selected.size;
+  $view.querySelector('[data-act="sel-replace"]').disabled = selected.size !== 1;
+  $view.querySelector('[data-act="sel-delete"]').disabled = selected.size === 0;
+  const all = $view.querySelectorAll('.thumb').length;
+  $view.querySelector('[data-act="sel-all"]').textContent = selected.size === all && all ? 'Keine' : 'Alle';
+}
+
+function toggleSelect(btn) {
+  const id = btn.dataset.id;
+  if (selected.has(id)) selected.delete(id); else selected.add(id);
+  btn.classList.toggle('is-selected', selected.has(id));
+  btn.setAttribute('aria-pressed', selected.has(id));
+  updateSelectBar();
+}
+function selectAll() {
+  const btns = [...$view.querySelectorAll('.thumb')];
+  const all = selected.size === btns.length;
+  selected.clear();
+  btns.forEach(b => { if (!all) selected.add(b.dataset.id); b.classList.toggle('is-selected', !all); b.setAttribute('aria-pressed', !all); });
+  updateSelectBar();
 }
 
 /* ---------- Aktionen ---------- */
@@ -258,6 +302,120 @@ async function deleteCollection(id) {
   go({ name: 'home' });
 }
 
+async function addImagesFlow(id) {
+  const files = pickFiles($fileImages);   // direkt aus dem Tipp heraus öffnen
+  const list = await files;
+  if (!list.length) return;
+  const pd = progressDialog('Bilder werden hinzugefügt');
+  try {
+    const report = await store.addImages(id, list, (i, n) => pd.update(i, n, `Bild ${Math.min(i + 1, n)} von ${n} wird vorbereitet …`));
+    pd.close();
+    if (report.added.length) toast(`${plural(report.added.length, 'Bild', 'Bilder')} hinzugefügt`);
+    await render();
+    await importReport(report);
+  } catch (e) {
+    pd.close();
+    modal({ title: 'Hinzufügen fehlgeschlagen', body: `<p>${esc(e.message || e)}</p>`, actions: [{ label: 'OK', kind: 'primary' }] });
+  }
+}
+
+async function deleteSelected(id) {
+  const n = selected.size;
+  if (!n) return;
+  const ok = await modal({
+    title: n === 1 ? 'Bild löschen?' : `${n} Bilder löschen?`,
+    body: `<p>${n === 1 ? 'Das ausgewählte Bild wird' : `Die ${n} ausgewählten Bilder werden`} aus dieser Sammlung gelöscht. In OneDrive bleiben sie erhalten.</p>`,
+    actions: [{ label: 'Abbrechen' }, { label: 'Löschen', kind: 'danger', value: true }],
+  });
+  if (!ok) return;
+  await store.deleteImages(id, [...selected]);
+  selected.clear();
+  toast(n === 1 ? 'Bild gelöscht' : `${n} Bilder gelöscht`);
+  render();
+}
+
+async function replaceSelected(id) {
+  if (selected.size !== 1) return;
+  const imageId = [...selected][0];
+  const files = pickFiles($fileImages);   // direkt aus dem Tipp heraus öffnen
+  const [file] = await files;
+  if (!file) return;
+  const pd = progressDialog('Bild wird ersetzt');
+  try {
+    const res = await store.replaceOne(id, imageId, file);
+    pd.close();
+    selected.clear();
+    toast('Bild ersetzt');
+    await render();
+    if (res.lowRes) await importReport({ failed: [], unnumbered: [], lowRes: [file.name] });
+  } catch (e) {
+    pd.close();
+    modal({ title: 'Ersetzen fehlgeschlagen', body: `<p>Die Datei „${esc(file.name)}“ konnte nicht gelesen werden.</p>`, actions: [{ label: 'OK', kind: 'primary' }] });
+  }
+}
+
+/* ---------- Logo ---------- */
+function logoPreviewHtml() {
+  return `<div class="logo-preview" data-preview><img alt="Logo-Vorschau"><span data-preview-text></span></div>`;
+}
+
+/** scope 'settings': Standard-Logo für alle · scope 'collection': eigenes Logo einer Sammlung */
+async function logoDialog(scope, col) {
+  const s = await db.getSettings();
+  let cur = scope === 'settings' ? { logo: s.logo || null, bg: s.logoBg || 'light' } : { logo: col.logo || null, bg: col.logoBg || 'light' };
+  const resetLabel = scope === 'settings' ? 'Time-Bandits-Logo verwenden' : 'Standard-Logo verwenden';
+  const result = await modal({
+    title: scope === 'settings' ? 'Standard-Logo' : `Logo für „${col.name}“`,
+    wide: true,
+    body: `<div style="display:flex;flex-direction:column;gap:16px">
+      <p class="muted small">${scope === 'settings'
+        ? 'Erscheint auf Start- und Abschlussbild aller Sammlungen, die kein eigenes Logo haben. Die Waben zeigen immer das Time-Bandits-Logo.'
+        : 'Erscheint nur bei dieser Sammlung auf Start- und Abschlussbild. Die Waben zeigen immer das Time-Bandits-Logo.'}</p>
+      ${logoPreviewHtml()}
+      <div style="display:flex;flex-wrap:wrap;gap:10px">
+        <button type="button" class="btn" data-l="pick">Logo wählen …</button>
+        <button type="button" class="btn" data-l="reset">${resetLabel}</button>
+      </div>
+      <div class="field" data-bg-field><label id="bg-label">Hintergrund</label>
+        <div class="seg small" role="radiogroup" aria-labelledby="bg-label">
+          <button type="button" role="radio" data-bg="light"><b>Hell</b><span>für dunkle Logos</span></button>
+          <button type="button" role="radio" data-bg="dark"><b>Dunkel</b><span>für helle oder weiße Logos</span></button>
+        </div></div>
+      <p class="muted small" data-inherit hidden>Es gilt das Standard-Logo aus den Einstellungen, mit dessen Hintergrund.</p>
+      <p class="muted small">Am besten eignet sich ein PNG mit transparentem Hintergrund.</p></div>`,
+    actions: [{ label: 'Abbrechen' }, { label: 'Speichern', kind: 'primary', onClick: () => ({ ...cur }) }],
+    onMount: w => {
+      const prev = w.querySelector('[data-preview]'), img = prev.querySelector('img');
+      w.querySelector('[data-preview-text]').textContent = s.outroText || '';
+      const update = () => {
+        let logo = cur.logo, bg = cur.bg;
+        const inherit = scope === 'collection' && !cur.logo;
+        if (inherit) { logo = s.logo; bg = s.logoBg || 'light'; }
+        img.src = logo ? url(logo) : DEFAULT_LOGO;
+        prev.classList.toggle('is-dark', bg === 'dark');
+        w.querySelector('[data-bg-field]').hidden = inherit;
+        w.querySelector('[data-inherit]').hidden = !inherit;
+        w.querySelector('[data-l="reset"]').hidden = !cur.logo;
+        w.querySelectorAll('[data-bg]').forEach(b => b.setAttribute('aria-checked', b.dataset.bg === cur.bg));
+      };
+      w.querySelectorAll('[data-bg]').forEach(b => b.addEventListener('click', () => { cur.bg = b.dataset.bg; update(); }));
+      w.querySelector('[data-l="reset"]').addEventListener('click', () => { cur.logo = null; if (scope === 'settings') cur.bg = 'light'; update(); });
+      w.querySelector('[data-l="pick"]').addEventListener('click', async () => {
+        const [file] = await pickFiles($fileLogo);
+        if (!file) return;
+        try { cur.logo = await processLogo(file); update(); }
+        catch (e) { toast('Diese Datei ist kein lesbares Bild'); }
+      });
+      update();
+    },
+  });
+  if (!result) return false;
+  if (scope === 'settings') await db.saveSettings({ logo: result.logo, logoBg: result.bg });
+  else await store.setCollectionLogo(col.id, result.logo, result.bg);
+  toast('Logo gespeichert');
+  return true;
+}
+
 /* ---------- Spiel starten ---------- */
 async function startDialog(id) {
   const col = await db.get('collections', id);
@@ -279,7 +437,8 @@ async function startDialog(id) {
         <dt>1 Sek. halten</dt><dd>ganzes Bild aufdecken</dd>
         <dt>Nach links wischen</dt><dd>nächstes Bild (wenn ganz aufgedeckt)</dd>
         <dt>Nach rechts wischen</dt><dd>vorheriges Bild</dd>
-        <dt>2 Finger 2 Sek. halten</dt><dd>Spiel beenden → Abschlussbild, dort nochmal → zurück ins Menü</dd>
+        <dt>2 Finger 1 Sek. halten</dt><dd>Spiel beenden → Abschlussbild</dd>
+        <dt>Abschlussbild antippen</dt><dd>Knopf „Zurück ins Menü“ erscheint für 4 Sekunden</dd>
       </dl></div>`,
     actions: [{ label: 'Abbrechen' }, { label: 'Los geht’s', kind: 'primary big', onClick: () => { requestFullscreen(); return true; } }],
     onMount: w => w.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => {
@@ -290,9 +449,11 @@ async function startDialog(id) {
   if (!ok) return;
   await db.saveSettings({ revealMode: mode });
   const images = await db.imagesOf(id);
+  const eff = await store.effectiveLogo(col);
+  const logoSrc = eff.logo ? URL.createObjectURL(eff.logo) : DEFAULT_LOGO;
   game = new Game($game, {
-    images, mode, outroText: settings.outroText,
-    onExit: () => { game = null; render(); },
+    images, mode, outroText: settings.outroText, logoSrc, stageDark: eff.bg === 'dark',
+    onExit: () => { game = null; if (eff.logo) URL.revokeObjectURL(logoSrc); render(); },
   });
   await game.start();
 }
@@ -382,6 +543,14 @@ async function settingsDialog() {
           <input type="text" id="outro-text" value="${esc(s.outroText)}" placeholder="leer lassen = nur Logo" autocomplete="off"></div>
       </div>
       <div class="section">
+        <h2>Standard-Logo</h2>
+        <div class="logo-row">
+          <div class="logo-preview${s.logoBg === 'dark' ? ' is-dark' : ''}"><img src="${s.logo ? url(s.logo) : DEFAULT_LOGO}" alt="Standard-Logo"></div>
+          <div><p class="muted small">Auf Start- und Abschlussbild aller Sammlungen ohne eigenes Logo. Jede Sammlung kann über „Logo“ ein eigenes bekommen.</p>
+          <button type="button" class="btn" data-a="logo">Ändern</button></div>
+        </div>
+      </div>
+      <div class="section">
         <h2>Sicherung</h2>
         <p class="muted small">Speichert alle Sammlungen mit Reihenfolge und Ausschnitten als eine Datei, z. B. in OneDrive. Damit lässt sich alles auf einem anderen iPad wiederherstellen.</p>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
@@ -396,7 +565,8 @@ async function settingsDialog() {
           <dt>1 Sek. halten</dt><dd>ganzes Bild aufdecken</dd>
           <dt>Nach links wischen</dt><dd>nächstes Bild (wenn ganz aufgedeckt)</dd>
           <dt>Nach rechts wischen</dt><dd>vorheriges Bild</dd>
-          <dt>2 Finger 2 Sek. halten</dt><dd>Abschlussbild, dort nochmal → Menü</dd>
+          <dt>2 Finger 1 Sek. halten</dt><dd>Spiel beenden → Abschlussbild</dd>
+          <dt>Abschlussbild antippen</dt><dd>„Zurück ins Menü“ erscheint für 4 Sekunden</dd>
           <dt>Am Computer</dt><dd>Leertaste = Wabe, A = alles, Pfeiltasten = weiter/zurück, E = Ende</dd>
         </dl>
       </div>
@@ -410,6 +580,7 @@ async function settingsDialog() {
       const save = async () => { await db.saveSettings({ outroText: input.value.trim() }); };
       input.addEventListener('change', save);
       w.querySelector('[data-a="backup"]').addEventListener('click', async () => { await save(); close(); makeBackup(); });
+      w.querySelector('[data-a="logo"]').addEventListener('click', async () => { await save(); close(); if (await logoDialog('settings')) settingsDialog(); });
       w.querySelector('[data-a="restore"]').addEventListener('click', async () => {
         await save();
         const files = pickFiles($fileBackup);
@@ -494,9 +665,15 @@ document.addEventListener('click', e => {
     case 'open': go({ name: 'collection', id }); break;
     case 'play': startDialog(route.id); break;
     case 'replace': replaceImages(route.id); break;
+    case 'add': addImagesFlow(route.id); break;
+    case 'select': selecting = !selecting; selected.clear(); render(); break;
+    case 'sel-all': selectAll(); break;
+    case 'sel-delete': deleteSelected(route.id); break;
+    case 'sel-replace': replaceSelected(route.id); break;
+    case 'logo': db.get('collections', route.id).then(col => logoDialog('collection', col)).then(ch => { if (ch) render(); }); break;
     case 'rename': renameCollection(route.id); break;
     case 'delete': deleteCollection(route.id); break;
-    case 'crop': cropEditor(id); break;
+    case 'crop': if (selecting) toggleSelect(b); else cropEditor(id); break;
   }
 });
 

@@ -1,4 +1,4 @@
-# Foto Puzzle – Version 1.0.1
+# Foto Puzzle – Version 1.1.0
 
 Bilderrätsel-App von Time Bandits für das iPad. Läuft nach der Einrichtung komplett offline.
 

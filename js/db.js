@@ -39,7 +39,7 @@ function result(req) {
 
 // Bilddaten als ArrayBuffer speichern statt als Blob: Safari auf dem iPad liest
 // gespeicherte Blobs nicht in jeder Situation zuverlässig zurück.
-const BINARY_FIELDS = ['blob', 'thumb'];
+const BINARY_FIELDS = ['blob', 'thumb', 'logo'];
 async function pack(value) {
   if (!value) return value;
   const out = { ...value };
@@ -123,7 +123,7 @@ export async function clearAll() {
   return done(tx);
 }
 
-const DEFAULT_SETTINGS = { key: 'settings', revealMode: 'rand', outroText: 'Danke fürs Mitraten!' };
+const DEFAULT_SETTINGS = { key: 'settings', revealMode: 'rand', outroText: 'Danke fürs Mitraten!', logo: null, logoBg: 'light' };
 export async function getSettings() {
   const s = await get('meta', 'settings');
   return { ...DEFAULT_SETTINGS, ...(s || {}) };

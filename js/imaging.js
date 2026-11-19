@@ -96,3 +96,18 @@ export function sortFiles(files) {
 export function baseName(name) {
   return name.replace(/\.[^.]+$/, '');
 }
+
+/** Eigenes Logo vorbereiten: PNG (Transparenz bleibt erhalten), höchstens 1600 px */
+export async function processLogo(file) {
+  const img = await loadImage(file);
+  const w0 = img.naturalWidth, h0 = img.naturalHeight;
+  if (!w0 || !h0) throw new Error('Logo nicht lesbar');
+  const s = Math.min(1, 1600 / Math.max(w0, h0));
+  const c = document.createElement('canvas');
+  c.width = Math.round(w0 * s); c.height = Math.round(h0 * s);
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, c.width, c.height);
+  return new Promise((resolve, reject) =>
+    c.toBlob(b => (b ? resolve(b) : reject(new Error('Logo konnte nicht gespeichert werden'))), 'image/png'));
+}

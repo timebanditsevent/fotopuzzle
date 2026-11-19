@@ -1,6 +1,6 @@
 // Offline-Betrieb: alle App-Dateien werden beim ersten Öffnen auf dem iPad gespeichert.
 // Bei jeder neuen Version die Versionsnummer erhöhen, dann lädt das iPad die Dateien neu.
-const VERSION = '1.0.1';
+const VERSION = '1.1.0';
 const CACHE = 'foto-puzzle-' + VERSION;
 const FILES = [
   './',

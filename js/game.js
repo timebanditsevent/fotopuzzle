@@ -7,7 +7,8 @@ const COLS = 6;                 // Wabenspalten über die Bildschirmbreite
 const LOGO_RATIO = 0.78;        // Logohöhe im Verhältnis zum Wabenradius
 const LOGO_ALPHA = 0.8;
 const LONG_PRESS_MS = 900;
-const TWO_FINGER_MS = 2000;
+const TWO_FINGER_MS = 1000;
+const EXIT_BUTTON_MS = 4000;  // so lange bleibt „Zurück ins Menü“ sichtbar
 const TAP_SLOP = 18;            // px Bewegung, die noch als Tippen gilt
 const SWIPE_MIN = 70;           // px für Wischen
 const FADE_MS = 280;
@@ -71,7 +72,7 @@ export function buildGrid(W, H) {
 
 /* ---------- Spiel ---------- */
 export class Game {
-  constructor(root, { images, mode, outroText, onExit }) {
+  constructor(root, { images, mode, outroText, onExit, logoSrc, stageDark }) {
     this.root = root;
     this.images = images;
     this.mode = mode;               // 'rand' | 'tap'
@@ -89,12 +90,14 @@ export class Game {
         <canvas class="g-photo" data-el="photo"></canvas>
         <canvas class="g-cover" data-el="cover"></canvas>
       </div>
-      <div class="g-stage is-on" data-el="stage">
-        <img class="g-logo" src="assets/logo-hoch.png" alt="Time Bandits">
+      <div class="g-stage is-on${stageDark ? ' is-dark' : ''}" data-el="stage">
+        <img class="g-logo" data-el="logo" alt="Logo">
         <p class="g-outro" data-el="outro"></p>
+        <button type="button" class="g-exit" data-el="exit" hidden>Zurück ins Menü</button>
       </div>`;
     this.el = {};
     root.querySelectorAll('[data-el]').forEach(n => (this.el[n.dataset.el] = n));
+    this.el.logo.src = logoSrc || 'assets/logo-hoch.png';
     this.el.outro.textContent = outroText || '';
     this.pc = this.el.photo.getContext('2d');
     this.cc = this.el.cover.getContext('2d');
@@ -268,6 +271,18 @@ export class Game {
     this.el.stage.classList.add('is-on', 'is-outro');
   }
 
+  /** Auf dem Abschlussbild: kleiner Knopf „Zurück ins Menü“, blendet sich nach 4 Sek. wieder aus */
+  showExitButton() {
+    const b = this.el.exit;
+    b.hidden = false;
+    requestAnimationFrame(() => b.classList.add('is-shown'));
+    clearTimeout(this.exitTimer);
+    this.exitTimer = setTimeout(() => {
+      b.classList.remove('is-shown');
+      this.exitTimer = setTimeout(() => { b.hidden = true; }, 300);
+    }, EXIT_BUTTON_MS);
+  }
+
   next() {
     if (!this.allRevealed()) return;
     if (this.idx + 1 < this.images.length) this.show(this.idx + 1);
@@ -287,6 +302,7 @@ export class Game {
     };
     this._down = e => {
       e.preventDefault();
+      if (!this.el.exit.hidden && e.target.closest('.g-exit')) { this.exitPress = e.pointerId; return; }
       this.pointers.set(e.pointerId, { x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, t0: performance.now() });
       if (this.pointers.size === 1) {
         g.mode = 'one'; g.fired = false;
@@ -305,7 +321,7 @@ export class Game {
         g.two = setTimeout(() => {
           if (g.mode !== 'two' || this.pointers.size !== 2) return;
           g.fired = true;
-          if (this.phase === 'outro') this.exit(); else this.showOutro();
+          if (this.phase === 'outro') this.showExitButton(); else this.showOutro();
         }, TWO_FINGER_MS);
       } else {
         clearTimeout(g.long); clearTimeout(g.two); g.mode = 'cancel';
@@ -320,6 +336,11 @@ export class Game {
       if (g.mode === 'two' && d > 40) { clearTimeout(g.two); g.mode = 'cancel'; }
     };
     this._up = e => {
+      if (this.exitPress === e.pointerId) {
+        this.exitPress = null;
+        if (e.target.closest && e.target.closest('.g-exit') && !this.el.exit.hidden) this.exit();
+        return;
+      }
       const p = this.pointers.get(e.pointerId);
       this.pointers.delete(e.pointerId);
       if (!p) return;
@@ -349,6 +370,7 @@ export class Game {
   tap(x, y) {
     if (this.phase === 'start') this.beginPlay();
     else if (this.phase === 'play') (this.mode === 'tap' ? this.revealAt(x, y) : this.revealRandom());
+    else if (this.phase === 'outro') this.showExitButton();
   }
 
   // Tastatur (z. B. am Mac): Leertaste = Teil, A = alles, Pfeile = weiter/zurück, E = Ende
@@ -368,6 +390,7 @@ export class Game {
 
   exit() {
     cancelAnimationFrame(this.anim);
+    clearTimeout(this.exitTimer);
     try { this.wake && this.wake.release(); } catch (e) { /* egal */ }
     try { if (document.fullscreenElement) document.exitFullscreen(); else if (document.webkitFullscreenElement) document.webkitExitFullscreen(); } catch (e) { /* egal */ }
     window.removeEventListener('resize', this._onResize);
