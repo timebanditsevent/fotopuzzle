@@ -111,3 +111,10 @@ export async function processLogo(file) {
   return new Promise((resolve, reject) =>
     c.toBlob(b => (b ? resolve(b) : reject(new Error('Logo konnte nicht gespeichert werden'))), 'image/png'));
 }
+
+/** Anzeigename: Dateiendung weg, führende Nummer weg („1 Obama.jpg“ → „Obama“) */
+export function cleanName(name) {
+  const base = baseName(name);
+  const stripped = base.replace(/^\s*\d+[\s._\-–)]*/, '').trim();
+  return stripped || base.trim();
+}

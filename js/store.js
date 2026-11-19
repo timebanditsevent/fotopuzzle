@@ -1,6 +1,6 @@
 // Sammlungen anlegen, ersetzen, löschen, sichern, wiederherstellen.
 import * as db from './db.js';
-import { processFile, sortFiles, orderKey, baseName, loadImage, makeThumb, isLowRes } from './imaging.js';
+import { processFile, sortFiles, orderKey, cleanName, loadImage, makeThumb, isLowRes } from './imaging.js';
 import { createZip, readZip } from './zip.js';
 
 export async function listCollections() {
@@ -18,7 +18,7 @@ async function importInto(collectionId, files, onProgress) {
     try {
       const p = await processFile(f);
       const rec = {
-        id: db.uid(), collectionId, order: i, name: baseName(f.name),
+        id: db.uid(), collectionId, order: i, name: cleanName(f.name),
         blob: p.blob, thumb: p.thumb, w: p.w, h: p.h,
         cx: p.cx, cy: p.cy, zoom: p.zoom, lowRes: p.lowRes,
       };
@@ -85,47 +85,91 @@ export async function replaceOne(collectionId, imageId, file) {
   const old = await db.get('images', imageId);
   const p = await processFile(file);
   await db.put('images', {
-    ...old, name: baseName(file.name),
+    ...old, name: cleanName(file.name),
     blob: p.blob, thumb: p.thumb, w: p.w, h: p.h, cx: p.cx, cy: p.cy, zoom: p.zoom, lowRes: p.lowRes,
   });
   await touch(collectionId);
   return { lowRes: p.lowRes };
 }
 
-/** Bilder hinzufügen – nach der Nummer im Dateinamen einsortieren, bestehende Reihenfolge bleibt */
+/** Bilder hinzufügen – neue Bilder kommen ans Ende */
 export async function addImages(collectionId, files, onProgress) {
   const tmpId = collectionId + ':neu';
   const report = await importInto(tmpId, files, onProgress);
-  const fresh = await db.imagesOf(tmpId);
-  const merged = await db.imagesOf(collectionId);
-  for (const n of fresh) {
-    const k = orderKey(n.name);
-    let pos = merged.length;
-    if (k !== null) {
-      const i = merged.findIndex(r => { const kr = orderKey(r.name); return kr === null || kr > k; });
-      if (i >= 0) pos = i;
-    }
-    merged.splice(pos, 0, n);
-  }
+  const merged = [...await db.imagesOf(collectionId), ...await db.imagesOf(tmpId)];
   merged.forEach((r, i) => { r.order = i; r.collectionId = collectionId; });
   await db.putMany('images', merged);
   await touch(collectionId);
   return report;
 }
 
-/** Logo für eine Sammlung (logo = null → Standard-Logo verwenden) */
-export async function setCollectionLogo(collectionId, logo, logoBg) {
+/** Neue Reihenfolge nach dem Sortieren speichern */
+export async function reorder(collectionId, ids) {
+  const imgs = await db.imagesOf(collectionId);
+  const pos = new Map(ids.map((id, i) => [id, i]));
+  imgs.forEach(r => { r.order = pos.has(r.id) ? pos.get(r.id) : 1e6 + r.order; });
+  imgs.sort((a, b) => a.order - b.order).forEach((r, i) => { r.order = i; });
+  await db.putMany('images', imgs);
+  await touch(collectionId);
+}
+
+export async function renameImage(imageId, name) {
+  const r = await db.get('images', imageId);
+  r.name = name.trim() || r.name;
+  await db.put('images', r);
+}
+
+/** Sammlung duplizieren – mit Bildern, Ausschnitten, Reihenfolge und Logos */
+export async function duplicateCollection(id) {
+  const col = await db.get('collections', id);
+  const copy = { ...col, id: db.uid(), name: `${col.name} (Kopie)`, created: Date.now(), updated: Date.now() };
+  await db.put('collections', copy);
+  const imgs = await db.imagesOf(id);
+  for (const r of imgs) await db.put('images', { ...r, id: db.uid(), collectionId: copy.id });
+  return copy;
+}
+
+/** Einmalig: Nummern vorne aus bestehenden Bildnamen entfernen (Reihenfolge bleibt) */
+export async function migrateNames() {
+  const s = await db.getSettings();
+  if (s.namesCleaned) return;
+  const all = await db.getAll('images');
+  const changed = all.filter(r => cleanName(r.name) !== r.name);
+  for (const r of changed) { r.name = cleanName(r.name); await db.put('images', r); }
+  await db.saveSettings({ namesCleaned: true });
+}
+
+/* ---------- Logos ----------
+   Sammlung: logoMode 'standard' | 'all' | 'each'
+   'all'  → logo/logoBg für Startbild, Abschlussbild und Waben
+   'each' → logoStart/logoEnd/logoWaben (+ …Bg); leere Bereiche nutzen das Standard-Logo */
+export const LOGO_SLOTS = ['Start', 'End', 'Waben'];
+
+export async function setCollectionLogos(collectionId, patch) {
   const col = await db.get('collections', collectionId);
-  col.logo = logo || null;
-  col.logoBg = logoBg || 'light';
+  Object.assign(col, patch);
   await db.put('collections', col);
 }
 
-/** Welches Logo und welcher Hintergrund gelten für eine Sammlung */
-export async function effectiveLogo(col) {
+function logoMode(col) {
+  if (!col) return 'standard';
+  if (col.logoMode) return col.logoMode;
+  return col.logo ? 'all' : 'standard';   // ältere Sammlungen
+}
+
+/** Logo und Hintergrund für Startbild, Abschlussbild und Waben (logo = null → Time-Bandits-Logo) */
+export async function effectiveLogos(col) {
   const s = await db.getSettings();
-  if (col && col.logo) return { logo: col.logo, bg: col.logoBg || 'light', source: 'collection' };
-  return { logo: s.logo || null, bg: s.logoBg || 'light', source: s.logo ? 'settings' : 'default' };
+  const std = { logo: s.logo || null, bg: s.logoBg || 'light', custom: false };
+  const mode = logoMode(col);
+  const out = {};
+  for (const k of LOGO_SLOTS) {
+    if (mode === 'all' && col.logo) out[k] = { logo: col.logo, bg: col.logoBg || 'light', custom: true };
+    else if (mode === 'each' && col['logo' + k]) out[k] = { logo: col['logo' + k], bg: col['logo' + k + 'Bg'] || 'light', custom: true };
+    else out[k] = std;
+  }
+  out.mode = mode;
+  return out;
 }
 
 export async function renameCollection(id, name) {
@@ -156,8 +200,11 @@ export async function createBackup(onProgress) {
   const all = [];
   for (const c of cols) { const imgs = await db.imagesOf(c.id); all.push([c, imgs]); total += imgs.length; }
   for (const [c, imgs] of all) {
-    const mc = { id: c.id, name: c.name, created: c.created, updated: c.updated, logoBg: c.logoBg, images: [] };
-    if (c.logo) { mc.logoFile = `logos/${c.id}.png`; entries.push({ name: mc.logoFile, data: c.logo }); }
+    const mc = { id: c.id, name: c.name, created: c.created, updated: c.updated, logoMode: c.logoMode, logoBg: c.logoBg, images: [] };
+    for (const f of ['logo', 'logoStart', 'logoEnd', 'logoWaben']) {
+      if (f !== 'logo') mc[f + 'Bg'] = c[f + 'Bg'];
+      if (c[f]) { mc[f + 'File'] = `logos/${c.id}-${f}.png`; entries.push({ name: mc[f + 'File'], data: c[f] }); }
+    }
     for (const r of imgs) {
       onProgress && onProgress(n++, total);
       entries.push({ name: `bilder/${r.id}.jpg`, data: r.blob });
@@ -188,7 +235,12 @@ export async function restoreBackup({ manifest, files }, onProgress) {
   const total = manifest.collections.reduce((s, c) => s + c.images.length, 0);
   const png = name => (name && files.get(name) ? new Blob([files.get(name)], { type: 'image/png' }) : null);
   for (const c of manifest.collections) {
-    await db.put('collections', { id: c.id, name: c.name, created: c.created, updated: c.updated, logo: png(c.logoFile), logoBg: c.logoBg || 'light' });
+    const col = { id: c.id, name: c.name, created: c.created, updated: c.updated, logoMode: c.logoMode, logoBg: c.logoBg || 'light' };
+    for (const f of ['logo', 'logoStart', 'logoEnd', 'logoWaben']) {
+      col[f] = png(c[f + 'File']);
+      if (f !== 'logo') col[f + 'Bg'] = c[f + 'Bg'] || 'light';
+    }
+    await db.put('collections', col);
     for (const r of c.images) {
       onProgress && onProgress(n++, total);
       const blob = new Blob([files.get(`bilder/${r.id}.jpg`)], { type: 'image/jpeg' });

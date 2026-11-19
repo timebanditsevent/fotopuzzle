@@ -1,10 +1,10 @@
 // Foto Puzzle – Spielleiter-Oberfläche
 import * as db from './db.js';
 import * as store from './store.js';
-import { Game, requestFullscreen } from './game.js';
+import { Game, requestFullscreen, buildGrid, paintWaben, loadImageUrl } from './game.js';
 import { TARGET_ASPECT, cropRect, defaultCrop, loadImage, processLogo } from './imaging.js';
 
-export const APP_VERSION = '1.1.0';
+export const APP_VERSION = '1.2.0';
 
 const $view = document.getElementById('view');
 const $modalRoot = document.getElementById('modal-root');
@@ -19,6 +19,7 @@ let objectUrls = [];
 let route = { name: 'home' };
 let game = null;
 let selecting = false;          // Auswahlmodus in der Sammlung
+let sorting = false;            // Sortiermodus in der Sammlung
 const selected = new Set();
 
 /* ---------- Hilfen ---------- */
@@ -103,7 +104,7 @@ function progressDialog(title) {
 async function importReport(report) {
   const parts = [];
   if (report.failed.length) parts.push(`<p><b>${plural(report.failed.length, 'Datei konnte', 'Dateien konnten')} nicht gelesen werden</b> und ${report.failed.length === 1 ? 'wurde' : 'wurden'} übersprungen:</p><ul class="list-small">${report.failed.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`);
-  if (report.unnumbered.length) parts.push(`<p><b>${plural(report.unnumbered.length, 'Bild hat', 'Bilder haben')} keine Nummer</b> am Anfang des Dateinamens und ${report.unnumbered.length === 1 ? 'steht' : 'stehen'} deshalb am Ende:</p><ul class="list-small">${report.unnumbered.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`);
+  if (false && report.unnumbered.length) parts.push(`<p><b>${plural(report.unnumbered.length, 'Bild hat', 'Bilder haben')} keine Nummer</b> am Anfang des Dateinamens und ${report.unnumbered.length === 1 ? 'steht' : 'stehen'} deshalb am Ende:</p><ul class="list-small">${report.unnumbered.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`);
   if (report.lowRes.length) parts.push(`<p><b>${plural(report.lowRes.length, 'Bild hat', 'Bilder haben')} eine geringe Auflösung</b> und ${report.lowRes.length === 1 ? 'wirkt' : 'wirken'} auf der Leinwand eventuell unscharf:</p><ul class="list-small">${report.lowRes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`);
   if (!parts.length) return;
   await modal({ title: 'Hinweise zum Import', body: `<div style="display:flex;flex-direction:column;gap:12px">${parts.join('')}</div>`, actions: [{ label: 'Verstanden', kind: 'primary' }] });
@@ -112,12 +113,12 @@ async function importReport(report) {
 /* ---------- Ansichten ---------- */
 async function render() {
   freeUrls();
-  $view.classList.remove('is-selecting');
+  $view.classList.remove('is-selecting', 'is-sorting');
   if (route.name === 'collection') await renderCollection(route.id);
   else await renderHome();
   $view.focus({ preventScroll: true });
 }
-function go(r) { route = r; selecting = false; selected.clear(); window.scrollTo(0, 0); render(); }
+function go(r) { route = r; selecting = false; sorting = false; selected.clear(); window.scrollTo(0, 0); render(); }
 
 async function renderHome() {
   const cols = await store.listCollections();
@@ -142,7 +143,7 @@ async function renderHome() {
         <h2>Noch keine Sammlung</h2>
         <ol>
           <li>In OneDrive einen Ordner pro Sammlung anlegen.</li>
-          <li>Bilder mit einer Nummer vorne benennen, z.&nbsp;B. <code>1 Obama.jpg</code>, <code>2 Fischer.jpg</code>. Die Nummer bestimmt die Reihenfolge im Spiel.</li>
+          <li>Optional: Bilder vorne nummerieren, z.&nbsp;B. <code>1 Obama.jpg</code>. Dann stimmt die Reihenfolge gleich beim Import. Die Nummer wird im Namen weggelassen.</li>
           <li>Hier auf „Neue Sammlung“ tippen und alle Bilder aus dem Ordner auswählen.</li>
         </ol>
         <button type="button" class="btn primary" data-act="new">+ Neue Sammlung</button>
@@ -156,21 +157,25 @@ async function renderCollection(id) {
   const low = imgs.filter(r => r.lowRes).length;
   for (const sid of [...selected]) if (!imgs.some(r => r.id === sid)) selected.delete(sid);
   $view.classList.toggle('is-selecting', selecting);
+  $view.classList.toggle('is-sorting', sorting);
+  const logoInfo = { standard: 'Standard-Logo', all: 'eigenes Logo', each: 'eigene Logos' }[(col.logoMode || (col.logo ? 'all' : 'standard'))];
   $view.innerHTML = `
     <div><button type="button" class="link" data-act="home">‹ Alle Sammlungen</button></div>
     <div class="col-head">
       <div>
         <h1>${esc(col.name)}</h1>
-        <p class="meta">${plural(imgs.length, 'Bild', 'Bilder')} · Reihenfolge aus den Dateinamen · ${col.logo ? 'eigenes Logo' : 'Standard-Logo'}</p>
+        <p class="meta">${plural(imgs.length, 'Bild', 'Bilder')} · ${logoInfo}</p>
       </div>
       <button type="button" class="btn primary big" data-act="play" ${imgs.length ? '' : 'disabled'}>Spiel starten</button>
     </div>
     <div class="tools">
       <button type="button" class="btn" data-act="add">+ Bilder hinzufügen</button>
+      <button type="button" class="btn" data-act="sort" ${imgs.length > 1 ? '' : 'disabled'}>${sorting ? 'Sortieren beenden' : 'Sortieren'}</button>
       <button type="button" class="btn" data-act="select" ${imgs.length ? '' : 'disabled'}>${selecting ? 'Auswahl beenden' : 'Auswählen'}</button>
       <button type="button" class="btn" data-act="replace">Alle ersetzen</button>
       <button type="button" class="btn" data-act="logo">Logo</button>
       <button type="button" class="btn" data-act="rename">Umbenennen</button>
+      <button type="button" class="btn" data-act="duplicate">Duplizieren</button>
       <button type="button" class="btn danger-ghost" data-act="delete">Sammlung löschen</button>
     </div>
     ${low ? `<div class="notice"><span><b>${plural(low, 'Bild hat', 'Bilder haben')} eine geringe Auflösung.</b> ${low === 1 ? 'Es ist' : 'Sie sind'} markiert und ${low === 1 ? 'kann' : 'können'} auf der Leinwand unscharf wirken.</span></div>` : ''}
@@ -181,7 +186,7 @@ async function renderCollection(id) {
           <span class="thumb-name">${esc(r.name)}</span>
         </button></li>`).join('')}
     </ol>
-    <p class="hint">${selecting ? 'Bilder antippen, um sie auszuwählen.' : 'Auf ein Bild tippen, um den sichtbaren Ausschnitt zu verschieben. Neue Bilder werden nach der Nummer im Dateinamen einsortiert.'}</p>
+    <p class="hint">${selecting ? 'Bilder antippen, um sie auszuwählen.' : sorting ? 'Bild mit dem Finger an die gewünschte Stelle ziehen.' : 'Bild antippen, um Namen oder Ausschnitt zu ändern. Neue Bilder kommen ans Ende.'}</p>
     ${selecting ? `<div class="selectbar" role="toolbar" aria-label="Auswahl">
       <span><b data-sel-count>0</b> ausgewählt</span>
       <div class="row">
@@ -189,8 +194,12 @@ async function renderCollection(id) {
         <button type="button" class="btn" data-act="sel-replace">Ersetzen</button>
         <button type="button" class="btn danger" data-act="sel-delete">Löschen</button>
         <button type="button" class="btn primary" data-act="select">Fertig</button>
-      </div></div>` : ''}`;
+      </div></div>` : ''}
+    ${sorting ? `<div class="selectbar" role="toolbar" aria-label="Sortieren">
+      <span>Bilder ziehen zum Sortieren</span>
+      <div class="row"><button type="button" class="btn primary" data-act="sort">Fertig</button></div></div>` : ''}`;
   updateSelectBar();
+  if (sorting) bindSorting(id);
 }
 
 function updateSelectBar() {
@@ -201,6 +210,67 @@ function updateSelectBar() {
   $view.querySelector('[data-act="sel-delete"]').disabled = selected.size === 0;
   const all = $view.querySelectorAll('.thumb').length;
   $view.querySelector('[data-act="sel-all"]').textContent = selected.size === all && all ? 'Keine' : 'Alle';
+}
+
+/** Sortieren: Bild festhalten und ziehen. Gespeichert wird beim Loslassen. */
+function bindSorting(collectionId) {
+  const grid = $view.querySelector('.grid');
+  if (!grid) return;
+  let drag = null, timer = 0;
+  const renumber = () => grid.querySelectorAll('.num').forEach((n, i) => { n.textContent = i + 1; });
+  const place = () => {
+    if (!drag) return;
+    drag.ghost.style.left = (drag.x - drag.dx) + 'px';
+    drag.ghost.style.top = (drag.y - drag.dy) + 'px';
+    for (const n of grid.children) {
+      if (n === drag.li) continue;
+      const b = n.getBoundingClientRect();
+      if (drag.x >= b.left && drag.x <= b.right && drag.y >= b.top && drag.y <= b.bottom) {
+        const after = drag.x > b.left + b.width / 2;
+        const ref = after ? n.nextSibling : n;
+        if (ref !== drag.li && ref !== drag.li.nextSibling) { grid.insertBefore(drag.li, ref); renumber(); }
+        break;
+      }
+    }
+  };
+  grid.addEventListener('pointerdown', e => {
+    const li = e.target.closest('li');
+    if (!li || drag) return;
+    e.preventDefault();
+    const b = li.getBoundingClientRect();
+    const ghost = li.cloneNode(true);
+    ghost.className = 'drag-ghost';
+    ghost.style.width = b.width + 'px';
+    document.body.appendChild(ghost);
+    li.classList.add('drag-src');
+    drag = { li, ghost, id: e.pointerId, dx: e.clientX - b.left, dy: e.clientY - b.top, x: e.clientX, y: e.clientY, from: [...grid.children].indexOf(li) };
+    try { grid.setPointerCapture(e.pointerId); } catch (err) { /* egal */ }
+    place();
+    timer = setInterval(() => {          // automatisch scrollen am oberen/unteren Rand
+      if (!drag) return;
+      if (drag.y < 110) { window.scrollBy(0, -14); place(); }
+      else if (drag.y > innerHeight - 130) { window.scrollBy(0, 14); place(); }
+    }, 30);
+  });
+  grid.addEventListener('pointermove', e => {
+    if (!drag || e.pointerId !== drag.id) return;
+    drag.x = e.clientX; drag.y = e.clientY;
+    place();
+  });
+  const end = async e => {
+    if (!drag || e.pointerId !== drag.id) return;
+    clearInterval(timer);
+    drag.ghost.remove();
+    drag.li.classList.remove('drag-src');
+    const moved = [...grid.children].indexOf(drag.li) !== drag.from;
+    drag = null;
+    if (moved) {
+      await store.reorder(collectionId, [...grid.querySelectorAll('.thumb')].map(t => t.dataset.id));
+      toast('Reihenfolge gespeichert');
+    }
+  };
+  grid.addEventListener('pointerup', end);
+  grid.addEventListener('pointercancel', end);
 }
 
 function toggleSelect(btn) {
@@ -354,64 +424,132 @@ async function replaceSelected(id) {
   }
 }
 
-/* ---------- Logo ---------- */
-function logoPreviewHtml() {
-  return `<div class="logo-preview" data-preview><img alt="Logo-Vorschau"><span data-preview-text></span></div>`;
+/* ---------- Duplizieren ---------- */
+async function duplicateCollection(id) {
+  const pd = progressDialog('Sammlung wird dupliziert');
+  try {
+    const copy = await store.duplicateCollection(id);
+    pd.close();
+    toast(`„${copy.name}“ angelegt`);
+    go({ name: 'collection', id: copy.id });
+  } catch (e) {
+    pd.close();
+    modal({ title: 'Duplizieren fehlgeschlagen', body: `<p>${esc(e.message || e)}</p><p class="muted small">Prüft, ob genug Speicher auf dem iPad frei ist.</p>`, actions: [{ label: 'OK', kind: 'primary' }] });
+  }
 }
 
-/** scope 'settings': Standard-Logo für alle · scope 'collection': eigenes Logo einer Sammlung */
+/* ---------- Logo ---------- */
+const SLOT_LABEL = { Start: 'Startbild', End: 'Abschlussbild', Waben: 'Waben' };
+
+function slotHtml(key, title, resetLabel) {
+  const stage = key !== 'Waben', hex = key === 'Waben' || key === 'all';
+  return `
+    <div class="slot" data-slot="${key}">
+      <div class="slot-prev">
+        ${stage ? '<div class="logo-preview" data-stage><img alt=""><span data-text></span></div>' : ''}
+        ${hex ? '<canvas class="hex-preview" width="432" height="300" aria-label="Vorschau Waben"></canvas>' : ''}
+      </div>
+      <div class="slot-ctl">
+        ${title ? `<h3>${title}</h3>` : ''}
+        <p class="muted small" data-std hidden>Standard-Logo</p>
+        <div class="row">
+          <button type="button" class="btn" data-pick>Logo wählen …</button>
+          <button type="button" class="btn" data-clear>${resetLabel}</button>
+        </div>
+        <div class="seg small" role="radiogroup" aria-label="Hintergrund" data-bgseg>
+          <button type="button" role="radio" data-bg="light"><b>Hell</b><span>für dunkle Logos</span></button>
+          <button type="button" role="radio" data-bg="dark"><b>Dunkel</b><span>für helle Logos</span></button>
+        </div>
+      </div>
+    </div>`;
+}
+
+/** scope 'settings': Standard-Logo für alles · scope 'collection': Logos einer Sammlung */
 async function logoDialog(scope, col) {
   const s = await db.getSettings();
-  let cur = scope === 'settings' ? { logo: s.logo || null, bg: s.logoBg || 'light' } : { logo: col.logo || null, bg: col.logoBg || 'light' };
-  const resetLabel = scope === 'settings' ? 'Time-Bandits-Logo verwenden' : 'Standard-Logo verwenden';
+  const std = { logo: s.logo || null, bg: s.logoBg || 'light' };
+  let mode = 'all';
+  const slots = { all: { ...std } };
+  if (scope === 'collection') {
+    mode = col.logoMode || (col.logo ? 'all' : 'standard');
+    slots.all = { logo: col.logo || null, bg: col.logoBg || 'light' };
+    for (const k of store.LOGO_SLOTS) slots[k] = { logo: col['logo' + k] || null, bg: col['logo' + k + 'Bg'] || 'light' };
+  }
+  const resetLabel = scope === 'settings' ? 'Time-Bandits-Logo' : 'Standard verwenden';
   const result = await modal({
     title: scope === 'settings' ? 'Standard-Logo' : `Logo für „${col.name}“`,
     wide: true,
-    body: `<div style="display:flex;flex-direction:column;gap:16px">
-      <p class="muted small">${scope === 'settings'
-        ? 'Erscheint auf Start- und Abschlussbild aller Sammlungen, die kein eigenes Logo haben. Die Waben zeigen immer das Time-Bandits-Logo.'
-        : 'Erscheint nur bei dieser Sammlung auf Start- und Abschlussbild. Die Waben zeigen immer das Time-Bandits-Logo.'}</p>
-      ${logoPreviewHtml()}
-      <div style="display:flex;flex-wrap:wrap;gap:10px">
-        <button type="button" class="btn" data-l="pick">Logo wählen …</button>
-        <button type="button" class="btn" data-l="reset">${resetLabel}</button>
-      </div>
-      <div class="field" data-bg-field><label id="bg-label">Hintergrund</label>
-        <div class="seg small" role="radiogroup" aria-labelledby="bg-label">
-          <button type="button" role="radio" data-bg="light"><b>Hell</b><span>für dunkle Logos</span></button>
-          <button type="button" role="radio" data-bg="dark"><b>Dunkel</b><span>für helle oder weiße Logos</span></button>
-        </div></div>
-      <p class="muted small" data-inherit hidden>Es gilt das Standard-Logo aus den Einstellungen, mit dessen Hintergrund.</p>
-      <p class="muted small">Am besten eignet sich ein PNG mit transparentem Hintergrund.</p></div>`,
-    actions: [{ label: 'Abbrechen' }, { label: 'Speichern', kind: 'primary', onClick: () => ({ ...cur }) }],
+    body: `<div class="logo-dialog">
+      ${scope === 'collection' ? `
+        <div class="seg three" role="radiogroup" aria-label="Logo">
+          <button type="button" role="radio" data-mode="standard"><b>Standard</b><span>Logo aus den Einstellungen</span></button>
+          <button type="button" role="radio" data-mode="all"><b>Ein Logo für alles</b><span>Startbild, Abschluss, Waben</span></button>
+          <button type="button" role="radio" data-mode="each"><b>Einzeln</b><span>pro Bereich festlegen</span></button>
+        </div>
+        <p class="muted small" data-pane="standard">Diese Sammlung nutzt das Standard-Logo aus den Einstellungen, auf Startbild, Abschlussbild und Waben.</p>` : `
+        <p class="muted small">Gilt für Startbild, Abschlussbild und Waben aller Sammlungen ohne eigenes Logo.</p>`}
+      <div data-pane="all">${slotHtml('all', '', resetLabel)}</div>
+      ${scope === 'collection' ? `<div data-pane="each" class="slots">${store.LOGO_SLOTS.map(k => slotHtml(k, SLOT_LABEL[k], resetLabel)).join('')}</div>` : ''}
+      <p class="muted small">Am besten eignet sich ein PNG mit transparentem Hintergrund. Alles funktioniert offline, sobald das Logo auf dem iPad liegt.</p>
+    </div>`,
+    actions: [{ label: 'Abbrechen' }, { label: 'Speichern', kind: 'primary', onClick: () => true }],
     onMount: w => {
-      const prev = w.querySelector('[data-preview]'), img = prev.querySelector('img');
-      w.querySelector('[data-preview-text]').textContent = s.outroText || '';
-      const update = () => {
-        let logo = cur.logo, bg = cur.bg;
-        const inherit = scope === 'collection' && !cur.logo;
-        if (inherit) { logo = s.logo; bg = s.logoBg || 'light'; }
-        img.src = logo ? url(logo) : DEFAULT_LOGO;
-        prev.classList.toggle('is-dark', bg === 'dark');
-        w.querySelector('[data-bg-field]').hidden = inherit;
-        w.querySelector('[data-inherit]').hidden = !inherit;
-        w.querySelector('[data-l="reset"]').hidden = !cur.logo;
-        w.querySelectorAll('[data-bg]').forEach(b => b.setAttribute('aria-checked', b.dataset.bg === cur.bg));
+      const imgCache = new Map();
+      const shown = key => {
+        const sl = slots[key];
+        if (sl.logo) return { logo: sl.logo, bg: sl.bg, std: false };
+        if (scope === 'settings') return { logo: null, bg: sl.bg, std: false };
+        return { logo: std.logo, bg: std.bg, std: true };
       };
-      w.querySelectorAll('[data-bg]').forEach(b => b.addEventListener('click', () => { cur.bg = b.dataset.bg; update(); }));
-      w.querySelector('[data-l="reset"]').addEventListener('click', () => { cur.logo = null; if (scope === 'settings') cur.bg = 'light'; update(); });
-      w.querySelector('[data-l="pick"]').addEventListener('click', async () => {
-        const [file] = await pickFiles($fileLogo);
-        if (!file) return;
-        try { cur.logo = await processLogo(file); update(); }
-        catch (e) { toast('Diese Datei ist kein lesbares Bild'); }
+      const srcOf = b => { if (!b) return null; if (!imgCache.has(b)) imgCache.set(b, url(b)); return imgCache.get(b); };
+      const paintSlot = async el => {
+        const key = el.dataset.slot, v = shown(key);
+        const st = el.querySelector('[data-stage]');
+        if (st) {
+          st.querySelector('img').src = srcOf(v.logo) || DEFAULT_LOGO;
+          st.classList.toggle('is-dark', v.bg === 'dark');
+          st.querySelector('[data-text]').textContent = key === 'Start' ? '' : (s.outroText || '');
+        }
+        el.querySelector('[data-std]').hidden = !v.std;
+        el.querySelector('[data-bgseg]').hidden = v.std;
+        el.querySelector('[data-clear]').hidden = !slots[key].logo;
+        el.querySelectorAll('[data-bg]').forEach(b => b.setAttribute('aria-checked', b.dataset.bg === slots[key].bg));
+        const cv = el.querySelector('.hex-preview');
+        if (cv) {
+          const img = await loadImageUrl(srcOf(v.logo) || 'assets/logo-wabe.png').catch(() => null);
+          paintWaben(cv.getContext('2d'), buildGrid(cv.width, cv.height), cv.width, cv.height, img, v.bg === 'dark');
+        }
+      };
+      const paintAll = () => {
+        w.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-checked', b.dataset.mode === mode));
+        w.querySelectorAll('[data-pane]').forEach(p => { p.hidden = p.dataset.pane !== mode; });
+        w.querySelectorAll('.slot').forEach(paintSlot);
+      };
+      w.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => { mode = b.dataset.mode; paintAll(); }));
+      w.querySelectorAll('.slot').forEach(el => {
+        const key = el.dataset.slot;
+        el.querySelectorAll('[data-bg]').forEach(b => b.addEventListener('click', () => { slots[key].bg = b.dataset.bg; paintSlot(el); }));
+        el.querySelector('[data-clear]').addEventListener('click', () => { slots[key].logo = null; if (scope === 'settings') slots[key].bg = 'light'; paintSlot(el); });
+        el.querySelector('[data-pick]').addEventListener('click', async () => {
+          const [file] = await pickFiles($fileLogo);
+          if (!file) return;
+          try { slots[key].logo = await processLogo(file); paintSlot(el); }
+          catch (e) { toast('Diese Datei ist kein lesbares Bild'); }
+        });
       });
-      update();
+      paintAll();
     },
   });
   if (!result) return false;
-  if (scope === 'settings') await db.saveSettings({ logo: result.logo, logoBg: result.bg });
-  else await store.setCollectionLogo(col.id, result.logo, result.bg);
+  if (scope === 'settings') {
+    await db.saveSettings({ logo: slots.all.logo, logoBg: slots.all.bg });
+  } else {
+    if (mode === 'all' && !slots.all.logo) mode = 'standard';
+    if (mode === 'each' && !store.LOGO_SLOTS.some(k => slots[k].logo)) mode = 'standard';
+    const patch = { logoMode: mode, logo: slots.all.logo, logoBg: slots.all.bg };
+    for (const k of store.LOGO_SLOTS) { patch['logo' + k] = slots[k].logo; patch['logo' + k + 'Bg'] = slots[k].bg; }
+    await store.setCollectionLogos(col.id, patch);
+  }
   toast('Logo gespeichert');
   return true;
 }
@@ -449,11 +587,16 @@ async function startDialog(id) {
   if (!ok) return;
   await db.saveSettings({ revealMode: mode });
   const images = await db.imagesOf(id);
-  const eff = await store.effectiveLogo(col);
-  const logoSrc = eff.logo ? URL.createObjectURL(eff.logo) : DEFAULT_LOGO;
+  const eff = await store.effectiveLogos(col);
+  const made = [], logos = {};
+  for (const k of store.LOGO_SLOTS) {
+    let src = null;
+    if (eff[k].logo) { src = URL.createObjectURL(eff[k].logo); made.push(src); }
+    logos[k] = { src, dark: eff[k].bg === 'dark' };
+  }
   game = new Game($game, {
-    images, mode, outroText: settings.outroText, logoSrc, stageDark: eff.bg === 'dark',
-    onExit: () => { game = null; if (eff.logo) URL.revokeObjectURL(logoSrc); render(); },
+    images, mode, outroText: settings.outroText, logos,
+    onExit: () => { game = null; made.forEach(u => URL.revokeObjectURL(u)); render(); },
   });
   await game.start();
 }
@@ -466,7 +609,7 @@ async function cropEditor(imageId) {
   const wrap = document.createElement('div');
   wrap.className = 'crop-wrap';
   wrap.innerHTML = `
-    <div class="crop-top"><h2>${esc(rec.name)}</h2><span class="muted small">Ausschnitt mit dem Finger verschieben</span></div>
+    <div class="crop-top"><div class="field name-field"><label for="img-name">Name (nur für euch sichtbar)</label><input type="text" id="img-name" value="${esc(rec.name)}" autocomplete="off"></div><span class="muted small">Ausschnitt mit dem Finger verschieben</span></div>
     <div class="crop-area"><canvas aria-label="Bildausschnitt"></canvas></div>
     <div class="crop-bottom">
       <label class="zoom" for="crop-zoom">Zoom <input type="range" id="crop-zoom" min="1" max="3" step="0.01" value="${crop.zoom}"></label>
@@ -520,9 +663,10 @@ async function cropEditor(imageId) {
   wrap.querySelector('[data-a="cancel"]').addEventListener('click', close);
   wrap.querySelector('[data-a="save"]').addEventListener('click', async () => {
     clamp();
-    await store.saveCrop(rec, crop);
+    const name = wrap.querySelector('#img-name').value.trim() || rec.name;
+    await store.saveCrop({ ...rec, name }, crop);
     close();
-    toast('Ausschnitt gespeichert');
+    toast('Gespeichert');
     render();
   });
   requestAnimationFrame(draw);
@@ -546,7 +690,7 @@ async function settingsDialog() {
         <h2>Standard-Logo</h2>
         <div class="logo-row">
           <div class="logo-preview${s.logoBg === 'dark' ? ' is-dark' : ''}"><img src="${s.logo ? url(s.logo) : DEFAULT_LOGO}" alt="Standard-Logo"></div>
-          <div><p class="muted small">Auf Start- und Abschlussbild aller Sammlungen ohne eigenes Logo. Jede Sammlung kann über „Logo“ ein eigenes bekommen.</p>
+          <div><p class="muted small">Auf Startbild, Abschlussbild und Waben aller Sammlungen ohne eigenes Logo. Jede Sammlung kann über „Logo“ eigene bekommen.</p>
           <button type="button" class="btn" data-a="logo">Ändern</button></div>
         </div>
       </div>
@@ -666,14 +810,16 @@ document.addEventListener('click', e => {
     case 'play': startDialog(route.id); break;
     case 'replace': replaceImages(route.id); break;
     case 'add': addImagesFlow(route.id); break;
-    case 'select': selecting = !selecting; selected.clear(); render(); break;
+    case 'select': selecting = !selecting; sorting = false; selected.clear(); render(); break;
+    case 'sort': sorting = !sorting; selecting = false; selected.clear(); render(); break;
+    case 'duplicate': duplicateCollection(route.id); break;
     case 'sel-all': selectAll(); break;
     case 'sel-delete': deleteSelected(route.id); break;
     case 'sel-replace': replaceSelected(route.id); break;
     case 'logo': db.get('collections', route.id).then(col => logoDialog('collection', col)).then(ch => { if (ch) render(); }); break;
     case 'rename': renameCollection(route.id); break;
     case 'delete': deleteCollection(route.id); break;
-    case 'crop': if (selecting) toggleSelect(b); else cropEditor(id); break;
+    case 'crop': if (sorting) break; if (selecting) toggleSelect(b); else cropEditor(id); break;
   }
 });
 
@@ -690,4 +836,4 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
   setInterval(() => { if (pending && !game) location.reload(); }, 5000);
 }
 
-render();
+store.migrateNames().catch(() => {}).then(render);

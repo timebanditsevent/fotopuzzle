@@ -3,8 +3,11 @@ import { loadImage, drawCropped } from './imaging.js';
 
 const PAPER = '#f2efe6';
 const INK = '#26282e';
+const DARK_FILL = '#1d2027';    // Waben bei dunklem Hintergrund
+const DARK_LINE = '#8d93a0';
 const COLS = 6;                 // Wabenspalten über die Bildschirmbreite
-const LOGO_RATIO = 0.78;        // Logohöhe im Verhältnis zum Wabenradius
+const LOGO_BOX_H = 0.78;        // Logo passt in ein Feld von 1,25 × 0,78 Wabenradius
+const LOGO_BOX_W = 1.25;
 const LOGO_ALPHA = 0.8;
 const LONG_PRESS_MS = 900;
 const TWO_FINGER_MS = 1000;
@@ -15,13 +18,25 @@ const FADE_MS = 280;
 
 const reduceMotion = () => window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-let logoWabe = null;
-function getLogo() {
-  if (!logoWabe) logoWabe = loadImageUrl('assets/logo-wabe.png');
-  return logoWabe;
-}
-function loadImageUrl(src) {
+export function loadImageUrl(src) {
   return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
+}
+
+/** Waben-Abdeckung zeichnen (auch für die Vorschau im Logo-Fenster) */
+export function paintWaben(x, cells, W, H, logo, dark) {
+  x.fillStyle = dark ? DARK_FILL : PAPER;
+  x.fillRect(0, 0, W, H);
+  if (logo && cells.length) {
+    const r = cells[0].r;
+    const s = Math.min(LOGO_BOX_W * r / logo.width, LOGO_BOX_H * r / logo.height);
+    const lw = logo.width * s, lh = logo.height * s;
+    x.globalAlpha = LOGO_ALPHA;
+    for (const c of cells) x.drawImage(logo, c.cx - lw / 2, c.cy - lh / 2, lw, lh);
+    x.globalAlpha = 1;
+  }
+  x.strokeStyle = dark ? DARK_LINE : INK;
+  x.lineWidth = Math.max(2, W / 900);
+  for (const c of cells) x.stroke(c.path);
 }
 
 /* ---------- Wabengitter ---------- */
@@ -72,7 +87,10 @@ export function buildGrid(W, H) {
 
 /* ---------- Spiel ---------- */
 export class Game {
-  constructor(root, { images, mode, outroText, onExit, logoSrc, stageDark }) {
+  constructor(root, { images, mode, outroText, onExit, logos }) {
+    // logos: { Start, End, Waben } je { src, dark }
+    const L = logos || {};
+    this.logos = { Start: L.Start || {}, End: L.End || {}, Waben: L.Waben || {} };
     this.root = root;
     this.images = images;
     this.mode = mode;               // 'rand' | 'tap'
@@ -90,14 +108,14 @@ export class Game {
         <canvas class="g-photo" data-el="photo"></canvas>
         <canvas class="g-cover" data-el="cover"></canvas>
       </div>
-      <div class="g-stage is-on${stageDark ? ' is-dark' : ''}" data-el="stage">
+      <div class="g-stage is-on${this.logos.Start.dark ? ' is-dark' : ''}" data-el="stage">
         <img class="g-logo" data-el="logo" alt="Logo">
         <p class="g-outro" data-el="outro"></p>
         <button type="button" class="g-exit" data-el="exit" hidden>Zurück ins Menü</button>
       </div>`;
     this.el = {};
     root.querySelectorAll('[data-el]').forEach(n => (this.el[n.dataset.el] = n));
-    this.el.logo.src = logoSrc || 'assets/logo-hoch.png';
+    this.el.logo.src = this.logos.Start.src || 'assets/logo-hoch.png';
     this.el.outro.textContent = outroText || '';
     this.pc = this.el.photo.getContext('2d');
     this.cc = this.el.cover.getContext('2d');
@@ -115,7 +133,7 @@ export class Game {
   }
 
   async start() {
-    this.logo = await getLogo().catch(() => null);
+    this.logo = await loadImageUrl(this.logos.Waben.src || 'assets/logo-wabe.png').catch(() => null);
     this.layout();
     this.lockScreen();
     await this.prepare(0);
@@ -144,17 +162,7 @@ export class Game {
 
   paintCoverFull() {
     const x = this.coverFull.getContext('2d');
-    x.fillStyle = PAPER;
-    x.fillRect(0, 0, this.W, this.H);
-    if (this.logo) {
-      const r = this.cells[0].r, lh = r * LOGO_RATIO, lw = lh * this.logo.width / this.logo.height;
-      x.globalAlpha = LOGO_ALPHA;
-      for (const c of this.cells) x.drawImage(this.logo, c.cx - lw / 2, c.cy - lh / 2, lw, lh);
-      x.globalAlpha = 1;
-    }
-    x.strokeStyle = INK;
-    x.lineWidth = Math.max(2, this.W / 900);
-    for (const c of this.cells) x.stroke(c.path);
+    paintWaben(x, this.cells, this.W, this.H, this.logo, !!this.logos.Waben.dark);
   }
 
   state(i = this.idx) {
@@ -268,6 +276,8 @@ export class Game {
 
   showOutro() {
     this.phase = 'outro';
+    this.el.logo.src = this.logos.End.src || 'assets/logo-hoch.png';
+    this.el.stage.classList.toggle('is-dark', !!this.logos.End.dark);
     this.el.stage.classList.add('is-on', 'is-outro');
   }
 

@@ -264,3 +264,27 @@ h2 { font-family: var(--display); font-weight: 600; font-size: 22px; margin: 0; 
 .logo-row > div { min-width: 0; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 @media (max-width: 520px) { .logo-row { grid-template-columns: 1fr; } }
 .seg.small button { padding: 10px 14px; }
+
+/* ---------- 1.2: Sortieren, Name, Logo-Bereiche ---------- */
+.is-sorting .grid { touch-action: none; }
+.is-sorting .thumb { cursor: grab; }
+.drag-src { opacity: .25; }
+.drag-ghost {
+  position: fixed; z-index: 40; pointer-events: none; list-style: none; margin: 0;
+  transform: scale(1.05); box-shadow: 0 18px 40px rgba(0,0,0,.5); border-radius: 8px; opacity: .95;
+}
+.drag-ghost .thumb { width: 100%; }
+.crop-top .name-field { flex: 1; min-width: 220px; max-width: 460px; }
+.crop-top .name-field label { color: var(--muted); font-weight: 500; font-size: 13px; }
+.crop-top .name-field input { min-height: 44px; padding: 8px 12px; }
+.logo-dialog { display: flex; flex-direction: column; gap: 16px; }
+.seg.three { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 560px) { .seg.three { grid-template-columns: 1fr; } }
+.slots { display: flex; flex-direction: column; gap: 14px; }
+.slot { display: grid; grid-template-columns: minmax(0, 220px) 1fr; gap: 16px; align-items: start; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.slot-prev { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.slot-ctl { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.slot-ctl h3 { margin: 0; font-family: var(--display); font-weight: 600; font-size: 18px; }
+.slot-ctl .row { display: flex; flex-wrap: wrap; gap: 8px; }
+.hex-preview { width: 100%; height: auto; aspect-ratio: 1.44; border-radius: 8px; border: 1px solid var(--line); display: block; }
+@media (max-width: 560px) { .slot { grid-template-columns: 1fr; } }
