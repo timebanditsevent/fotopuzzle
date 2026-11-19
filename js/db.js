@@ -123,7 +123,7 @@ export async function clearAll() {
   return done(tx);
 }
 
-const DEFAULT_SETTINGS = { key: 'settings', revealMode: 'rand', outroText: 'Danke fürs Mitraten!', logo: null, logoBg: 'light' };
+const DEFAULT_SETTINGS = { key: 'settings', revealMode: 'rand', outroText: 'Danke fürs Mitraten!', logo: null, logoBg: 'dark' };
 export async function getSettings() {
   const s = await get('meta', 'settings');
   return { ...DEFAULT_SETTINGS, ...(s || {}) };

@@ -139,6 +139,13 @@ export async function migrateNames() {
   await db.saveSettings({ namesCleaned: true });
 }
 
+/** Einmalig (1.3): Standard wird das weiße Logo auf dunklem Hintergrund */
+export async function migrateDefaultDark() {
+  const s = await db.getSettings();
+  if (s.defaultDark13) return;
+  await db.saveSettings({ defaultDark13: true, ...(s.logo ? {} : { logoBg: 'dark' }) });
+}
+
 /* ---------- Logos ----------
    Sammlung: logoMode 'standard' | 'all' | 'each'
    'all'  → logo/logoBg für Startbild, Abschlussbild und Waben
@@ -160,7 +167,7 @@ function logoMode(col) {
 /** Logo und Hintergrund für Startbild, Abschlussbild und Waben (logo = null → Time-Bandits-Logo) */
 export async function effectiveLogos(col) {
   const s = await db.getSettings();
-  const std = { logo: s.logo || null, bg: s.logoBg || 'light', custom: false };
+  const std = { logo: s.logo || null, bg: s.logoBg || 'dark', custom: false };
   const mode = logoMode(col);
   const out = {};
   for (const k of LOGO_SLOTS) {

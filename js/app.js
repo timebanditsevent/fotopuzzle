@@ -1,10 +1,10 @@
 // Foto Puzzle – Spielleiter-Oberfläche
 import * as db from './db.js';
 import * as store from './store.js';
-import { Game, requestFullscreen, buildGrid, paintWaben, loadImageUrl } from './game.js';
+import { Game, requestFullscreen, buildGrid, paintWaben, loadImageUrl, defaultStageLogo, defaultWabenLogo } from './game.js';
 import { TARGET_ASPECT, cropRect, defaultCrop, loadImage, processLogo } from './imaging.js';
 
-export const APP_VERSION = '1.2.0';
+export const APP_VERSION = '1.3.0';
 
 const $view = document.getElementById('view');
 const $modalRoot = document.getElementById('modal-root');
@@ -13,7 +13,6 @@ const $toast = document.getElementById('toast');
 const $fileImages = document.getElementById('file-images');
 const $fileBackup = document.getElementById('file-backup');
 const $fileLogo = document.getElementById('file-logo');
-const DEFAULT_LOGO = 'assets/logo-hoch.png';
 
 let objectUrls = [];
 let route = { name: 'home' };
@@ -172,10 +171,8 @@ async function renderCollection(id) {
       <button type="button" class="btn" data-act="add">+ Bilder hinzufügen</button>
       <button type="button" class="btn" data-act="sort" ${imgs.length > 1 ? '' : 'disabled'}>${sorting ? 'Sortieren beenden' : 'Sortieren'}</button>
       <button type="button" class="btn" data-act="select" ${imgs.length ? '' : 'disabled'}>${selecting ? 'Auswahl beenden' : 'Auswählen'}</button>
-      <button type="button" class="btn" data-act="replace">Alle ersetzen</button>
       <button type="button" class="btn" data-act="logo">Logo</button>
       <button type="button" class="btn" data-act="rename">Umbenennen</button>
-      <button type="button" class="btn" data-act="duplicate">Duplizieren</button>
       <button type="button" class="btn danger-ghost" data-act="delete">Sammlung löschen</button>
     </div>
     ${low ? `<div class="notice"><span><b>${plural(low, 'Bild hat', 'Bilder haben')} eine geringe Auflösung.</b> ${low === 1 ? 'Es ist' : 'Sie sind'} markiert und ${low === 1 ? 'kann' : 'können'} auf der Leinwand unscharf wirken.</span></div>` : ''}
@@ -431,7 +428,7 @@ async function duplicateCollection(id) {
     const copy = await store.duplicateCollection(id);
     pd.close();
     toast(`„${copy.name}“ angelegt`);
-    go({ name: 'collection', id: copy.id });
+    render();
   } catch (e) {
     pd.close();
     modal({ title: 'Duplizieren fehlgeschlagen', body: `<p>${esc(e.message || e)}</p><p class="muted small">Prüft, ob genug Speicher auf dem iPad frei ist.</p>`, actions: [{ label: 'OK', kind: 'primary' }] });
@@ -467,7 +464,7 @@ function slotHtml(key, title, resetLabel) {
 /** scope 'settings': Standard-Logo für alles · scope 'collection': Logos einer Sammlung */
 async function logoDialog(scope, col) {
   const s = await db.getSettings();
-  const std = { logo: s.logo || null, bg: s.logoBg || 'light' };
+  const std = { logo: s.logo || null, bg: s.logoBg || 'dark' };
   let mode = 'all';
   const slots = { all: { ...std } };
   if (scope === 'collection') {
@@ -506,7 +503,7 @@ async function logoDialog(scope, col) {
         const key = el.dataset.slot, v = shown(key);
         const st = el.querySelector('[data-stage]');
         if (st) {
-          st.querySelector('img').src = srcOf(v.logo) || DEFAULT_LOGO;
+          st.querySelector('img').src = srcOf(v.logo) || defaultStageLogo(v.bg === 'dark');
           st.classList.toggle('is-dark', v.bg === 'dark');
           st.querySelector('[data-text]').textContent = key === 'Start' ? '' : (s.outroText || '');
         }
@@ -516,7 +513,7 @@ async function logoDialog(scope, col) {
         el.querySelectorAll('[data-bg]').forEach(b => b.setAttribute('aria-checked', b.dataset.bg === slots[key].bg));
         const cv = el.querySelector('.hex-preview');
         if (cv) {
-          const img = await loadImageUrl(srcOf(v.logo) || 'assets/logo-wabe.png').catch(() => null);
+          const img = await loadImageUrl(srcOf(v.logo) || defaultWabenLogo(v.bg === 'dark')).catch(() => null);
           paintWaben(cv.getContext('2d'), buildGrid(cv.width, cv.height), cv.width, cv.height, img, v.bg === 'dark');
         }
       };
@@ -529,7 +526,7 @@ async function logoDialog(scope, col) {
       w.querySelectorAll('.slot').forEach(el => {
         const key = el.dataset.slot;
         el.querySelectorAll('[data-bg]').forEach(b => b.addEventListener('click', () => { slots[key].bg = b.dataset.bg; paintSlot(el); }));
-        el.querySelector('[data-clear]').addEventListener('click', () => { slots[key].logo = null; if (scope === 'settings') slots[key].bg = 'light'; paintSlot(el); });
+        el.querySelector('[data-clear]').addEventListener('click', () => { slots[key].logo = null; if (scope === 'settings') slots[key].bg = 'dark'; paintSlot(el); });
         el.querySelector('[data-pick]').addEventListener('click', async () => {
           const [file] = await pickFiles($fileLogo);
           if (!file) return;
@@ -689,7 +686,7 @@ async function settingsDialog() {
       <div class="section">
         <h2>Standard-Logo</h2>
         <div class="logo-row">
-          <div class="logo-preview${s.logoBg === 'dark' ? ' is-dark' : ''}"><img src="${s.logo ? url(s.logo) : DEFAULT_LOGO}" alt="Standard-Logo"></div>
+          <div class="logo-preview${s.logoBg !== 'light' ? ' is-dark' : ''}"><img src="${s.logo ? url(s.logo) : defaultStageLogo(s.logoBg !== 'light')}" alt="Standard-Logo"></div>
           <div><p class="muted small">Auf Startbild, Abschlussbild und Waben aller Sammlungen ohne eigenes Logo. Jede Sammlung kann über „Logo“ eigene bekommen.</p>
           <button type="button" class="btn" data-a="logo">Ändern</button></div>
         </div>
@@ -808,11 +805,9 @@ document.addEventListener('click', e => {
     case 'new': newCollection(); break;
     case 'open': go({ name: 'collection', id }); break;
     case 'play': startDialog(route.id); break;
-    case 'replace': replaceImages(route.id); break;
     case 'add': addImagesFlow(route.id); break;
     case 'select': selecting = !selecting; sorting = false; selected.clear(); render(); break;
     case 'sort': sorting = !sorting; selecting = false; selected.clear(); render(); break;
-    case 'duplicate': duplicateCollection(route.id); break;
     case 'sel-all': selectAll(); break;
     case 'sel-delete': deleteSelected(route.id); break;
     case 'sel-replace': replaceSelected(route.id); break;
@@ -822,6 +817,47 @@ document.addEventListener('click', e => {
     case 'crop': if (sorting) break; if (selecting) toggleSelect(b); else cropEditor(id); break;
   }
 });
+
+/* ---------- Übersicht: Sammlung lange antippen → Menü ---------- */
+let pressTimer = 0, pressStart = null, suppressClick = false;
+async function collectionMenu(id) {
+  const col = await db.get('collections', id);
+  if (!col) return;
+  const act = await modal({
+    title: col.name,
+    body: `<p class="muted small">${plural(await db.countOf(id), 'Bild', 'Bilder')}</p>`,
+    actions: [
+      { label: 'Abbrechen' },
+      { label: 'Löschen', kind: 'danger-ghost', value: 'delete' },
+      { label: 'Duplizieren', value: 'duplicate' },
+      { label: 'Umbenennen', kind: 'primary', value: 'rename' },
+    ],
+  });
+  if (act === 'rename') renameCollection(id);
+  else if (act === 'duplicate') duplicateCollection(id);
+  else if (act === 'delete') deleteCollection(id);
+}
+$view.addEventListener('pointerdown', e => {
+  const card = e.target.closest('.card');
+  suppressClick = false;
+  if (!card || game) return;
+  pressStart = { x: e.clientX, y: e.clientY };
+  clearTimeout(pressTimer);
+  pressTimer = setTimeout(() => { suppressClick = true; pressStart = null; collectionMenu(card.dataset.id); }, 500);
+});
+$view.addEventListener('pointermove', e => {
+  if (pressStart && Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) > 10) { clearTimeout(pressTimer); pressStart = null; }
+});
+['pointerup', 'pointercancel'].forEach(t => $view.addEventListener(t, () => { clearTimeout(pressTimer); pressStart = null; }));
+$view.addEventListener('contextmenu', e => {           // Rechtsklick am Computer
+  const card = e.target.closest('.card');
+  if (!card) return;
+  e.preventDefault(); clearTimeout(pressTimer);
+  collectionMenu(card.dataset.id);
+});
+$view.addEventListener('click', e => {                 // nach langem Antippen die Sammlung nicht öffnen
+  if (suppressClick) { suppressClick = false; e.stopPropagation(); e.preventDefault(); }
+}, true);
 
 /* ---------- Offline (Service Worker) ---------- */
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
@@ -836,4 +872,4 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
   setInterval(() => { if (pending && !game) location.reload(); }, 5000);
 }
 
-store.migrateNames().catch(() => {}).then(render);
+store.migrateNames().then(store.migrateDefaultDark).catch(() => {}).then(render);

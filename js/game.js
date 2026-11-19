@@ -18,6 +18,10 @@ const FADE_MS = 280;
 
 const reduceMotion = () => window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+/** Time-Bandits-Logo: weiß auf dunklem, schwarz auf hellem Hintergrund */
+export const defaultStageLogo = dark => (dark ? 'assets/logo-hoch-weiss.png' : 'assets/logo-hoch.png');
+export const defaultWabenLogo = dark => (dark ? 'assets/logo-wabe-weiss.png' : 'assets/logo-wabe.png');
+
 export function loadImageUrl(src) {
   return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
 }
@@ -115,7 +119,7 @@ export class Game {
       </div>`;
     this.el = {};
     root.querySelectorAll('[data-el]').forEach(n => (this.el[n.dataset.el] = n));
-    this.el.logo.src = this.logos.Start.src || 'assets/logo-hoch.png';
+    this.el.logo.src = this.logos.Start.src || defaultStageLogo(this.logos.Start.dark);
     this.el.outro.textContent = outroText || '';
     this.pc = this.el.photo.getContext('2d');
     this.cc = this.el.cover.getContext('2d');
@@ -133,7 +137,7 @@ export class Game {
   }
 
   async start() {
-    this.logo = await loadImageUrl(this.logos.Waben.src || 'assets/logo-wabe.png').catch(() => null);
+    this.logo = await loadImageUrl(this.logos.Waben.src || defaultWabenLogo(this.logos.Waben.dark)).catch(() => null);
     this.layout();
     this.lockScreen();
     await this.prepare(0);
@@ -276,7 +280,7 @@ export class Game {
 
   showOutro() {
     this.phase = 'outro';
-    this.el.logo.src = this.logos.End.src || 'assets/logo-hoch.png';
+    this.el.logo.src = this.logos.End.src || defaultStageLogo(this.logos.End.dark);
     this.el.stage.classList.toggle('is-dark', !!this.logos.End.dark);
     this.el.stage.classList.add('is-on', 'is-outro');
   }
