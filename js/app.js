@@ -4,7 +4,7 @@ import * as store from './store.js';
 import { Game, requestFullscreen, buildGrid, paintWaben, loadImageUrl, defaultStageLogo, defaultWabenLogo } from './game.js';
 import { TARGET_ASPECT, cropRect, defaultCrop, loadImage, processLogo } from './imaging.js';
 
-export const APP_VERSION = '1.3.0';
+export const APP_VERSION = '1.4.0';
 
 const $view = document.getElementById('view');
 const $modalRoot = document.getElementById('modal-root');
@@ -171,7 +171,7 @@ async function renderCollection(id) {
       <button type="button" class="btn" data-act="add">+ Bilder hinzufügen</button>
       <button type="button" class="btn" data-act="sort" ${imgs.length > 1 ? '' : 'disabled'}>${sorting ? 'Sortieren beenden' : 'Sortieren'}</button>
       <button type="button" class="btn" data-act="select" ${imgs.length ? '' : 'disabled'}>${selecting ? 'Auswahl beenden' : 'Auswählen'}</button>
-      <button type="button" class="btn" data-act="logo">Logo</button>
+      <button type="button" class="btn" data-act="logo">Logo &amp; Text</button>
       <button type="button" class="btn" data-act="rename">Umbenennen</button>
       <button type="button" class="btn danger-ghost" data-act="delete">Sammlung löschen</button>
     </div>
@@ -465,6 +465,7 @@ function slotHtml(key, title, resetLabel) {
 async function logoDialog(scope, col) {
   const s = await db.getSettings();
   const std = { logo: s.logo || null, bg: s.logoBg || 'dark' };
+  let outro = scope === 'collection' ? (col.outroText ?? s.outroText ?? '') : 'Danke fürs Mitraten!';
   let mode = 'all';
   const slots = { all: { ...std } };
   if (scope === 'collection') {
@@ -474,9 +475,11 @@ async function logoDialog(scope, col) {
   }
   const resetLabel = scope === 'settings' ? 'Time-Bandits-Logo' : 'Standard verwenden';
   const result = await modal({
-    title: scope === 'settings' ? 'Standard-Logo' : `Logo für „${col.name}“`,
+    title: scope === 'settings' ? 'Standard-Logo' : `Logo & Text für „${col.name}“`,
     wide: true,
     body: `<div class="logo-dialog">
+      ${scope === 'collection' ? `<div class="field"><label for="col-outro">Text auf dem Abschlussbild</label>
+        <input type="text" id="col-outro" value="${esc(outro)}" placeholder="leer lassen = nur Logo" autocomplete="off"></div>` : ''}
       ${scope === 'collection' ? `
         <div class="seg three" role="radiogroup" aria-label="Logo">
           <button type="button" role="radio" data-mode="standard"><b>Standard</b><span>Logo aus den Einstellungen</span></button>
@@ -505,7 +508,7 @@ async function logoDialog(scope, col) {
         if (st) {
           st.querySelector('img').src = srcOf(v.logo) || defaultStageLogo(v.bg === 'dark');
           st.classList.toggle('is-dark', v.bg === 'dark');
-          st.querySelector('[data-text]').textContent = key === 'Start' ? '' : (s.outroText || '');
+          st.querySelector('[data-text]').textContent = key === 'Start' ? '' : outro;
         }
         el.querySelector('[data-std]').hidden = !v.std;
         el.querySelector('[data-bgseg]').hidden = v.std;
@@ -534,6 +537,8 @@ async function logoDialog(scope, col) {
           catch (e) { toast('Diese Datei ist kein lesbares Bild'); }
         });
       });
+      const outroInput = w.querySelector('#col-outro');
+      if (outroInput) outroInput.addEventListener('input', () => { outro = outroInput.value; w.querySelectorAll('.slot').forEach(paintSlot); });
       paintAll();
     },
   });
@@ -543,11 +548,11 @@ async function logoDialog(scope, col) {
   } else {
     if (mode === 'all' && !slots.all.logo) mode = 'standard';
     if (mode === 'each' && !store.LOGO_SLOTS.some(k => slots[k].logo)) mode = 'standard';
-    const patch = { logoMode: mode, logo: slots.all.logo, logoBg: slots.all.bg };
+    const patch = { logoMode: mode, logo: slots.all.logo, logoBg: slots.all.bg, outroText: outro.trim() };
     for (const k of store.LOGO_SLOTS) { patch['logo' + k] = slots[k].logo; patch['logo' + k + 'Bg'] = slots[k].bg; }
     await store.setCollectionLogos(col.id, patch);
   }
-  toast('Logo gespeichert');
+  toast('Gespeichert');
   return true;
 }
 
@@ -592,7 +597,7 @@ async function startDialog(id) {
     logos[k] = { src, dark: eff[k].bg === 'dark' };
   }
   game = new Game($game, {
-    images, mode, outroText: settings.outroText, logos,
+    images, mode, outroText: col.outroText ?? settings.outroText, logos,
     onExit: () => { game = null; made.forEach(u => URL.revokeObjectURL(u)); render(); },
   });
   await game.start();
@@ -680,10 +685,6 @@ async function settingsDialog() {
     wide: true,
     body: `<div style="display:flex;flex-direction:column;gap:18px">
       <div class="section">
-        <div class="field"><label for="outro-text">Text auf dem Abschlussbild</label>
-          <input type="text" id="outro-text" value="${esc(s.outroText)}" placeholder="leer lassen = nur Logo" autocomplete="off"></div>
-      </div>
-      <div class="section">
         <h2>Standard-Logo</h2>
         <div class="logo-row">
           <div class="logo-preview${s.logoBg !== 'light' ? ' is-dark' : ''}"><img src="${s.logo ? url(s.logo) : defaultStageLogo(s.logoBg !== 'light')}" alt="Standard-Logo"></div>
@@ -715,22 +716,18 @@ async function settingsDialog() {
         <p class="small">Offline-Betrieb: <b>${offline ? 'bereit' : 'noch nicht bereit'}</b>${offline ? '' : ' <span class="muted">(App einmal mit Internet vom Home-Bildschirm öffnen)</span>'}</p>
         <p class="small muted">Belegter Speicher: ${used} · Version ${APP_VERSION}</p>
       </div></div>`,
-    actions: [{ label: 'Fertig', kind: 'primary', onClick: w => w.querySelector('#outro-text').value }],
+    actions: [{ label: 'Fertig', kind: 'primary' }],
     onMount: (w, close) => {
-      const input = w.querySelector('#outro-text');
-      const save = async () => { await db.saveSettings({ outroText: input.value.trim() }); };
-      input.addEventListener('change', save);
-      w.querySelector('[data-a="backup"]').addEventListener('click', async () => { await save(); close(); makeBackup(); });
-      w.querySelector('[data-a="logo"]').addEventListener('click', async () => { await save(); close(); if (await logoDialog('settings')) settingsDialog(); });
+      w.querySelector('[data-a="backup"]').addEventListener('click', () => { close(); makeBackup(); });
+      w.querySelector('[data-a="logo"]').addEventListener('click', async () => { close(); if (await logoDialog('settings')) settingsDialog(); });
       w.querySelector('[data-a="restore"]').addEventListener('click', async () => {
-        await save();
         const files = pickFiles($fileBackup);
         close();
         const [file] = await files;
         if (file) loadBackup(file);
       });
     },
-  }).then(async v => { if (typeof v === 'string') { await db.saveSettings({ outroText: v.trim() }); } });
+  });
 }
 
 async function makeBackup() {

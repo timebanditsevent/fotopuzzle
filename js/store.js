@@ -40,7 +40,7 @@ async function importInto(collectionId, files, onProgress) {
 
 export async function createCollection(name, files, onProgress) {
   try { await navigator.storage?.persist?.(); } catch (e) { /* optional */ }
-  const col = { id: db.uid(), name: name.trim() || 'Neue Sammlung', created: Date.now(), updated: Date.now() };
+  const col = { id: db.uid(), name: name.trim() || 'Neue Sammlung', created: Date.now(), updated: Date.now(), outroText: 'Danke fürs Mitraten!' };
   await db.put('collections', col);
   const report = await importInto(col.id, files, onProgress);
   if (!report.added.length) { await db.deleteCollection(col.id); }
@@ -207,7 +207,7 @@ export async function createBackup(onProgress) {
   const all = [];
   for (const c of cols) { const imgs = await db.imagesOf(c.id); all.push([c, imgs]); total += imgs.length; }
   for (const [c, imgs] of all) {
-    const mc = { id: c.id, name: c.name, created: c.created, updated: c.updated, logoMode: c.logoMode, logoBg: c.logoBg, images: [] };
+    const mc = { id: c.id, name: c.name, created: c.created, updated: c.updated, outroText: c.outroText ?? settings.outroText, logoMode: c.logoMode, logoBg: c.logoBg, images: [] };
     for (const f of ['logo', 'logoStart', 'logoEnd', 'logoWaben']) {
       if (f !== 'logo') mc[f + 'Bg'] = c[f + 'Bg'];
       if (c[f]) { mc[f + 'File'] = `logos/${c.id}-${f}.png`; entries.push({ name: mc[f + 'File'], data: c[f] }); }
@@ -242,7 +242,7 @@ export async function restoreBackup({ manifest, files }, onProgress) {
   const total = manifest.collections.reduce((s, c) => s + c.images.length, 0);
   const png = name => (name && files.get(name) ? new Blob([files.get(name)], { type: 'image/png' }) : null);
   for (const c of manifest.collections) {
-    const col = { id: c.id, name: c.name, created: c.created, updated: c.updated, logoMode: c.logoMode, logoBg: c.logoBg || 'light' };
+    const col = { id: c.id, name: c.name, created: c.created, updated: c.updated, outroText: c.outroText ?? manifest.settings?.outroText, logoMode: c.logoMode, logoBg: c.logoBg || 'light' };
     for (const f of ['logo', 'logoStart', 'logoEnd', 'logoWaben']) {
       col[f] = png(c[f + 'File']);
       if (f !== 'logo') col[f + 'Bg'] = c[f + 'Bg'] || 'light';
